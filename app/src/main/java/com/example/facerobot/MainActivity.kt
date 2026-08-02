@@ -76,8 +76,13 @@ class MainActivity : ComponentActivity() {
 
     private var appState = AppState.EYES
 
-    // PALITAN ITO ng IP address ng ESP32 mo (makikita sa Serial Monitor pag nag-boot)
-    private val esp32BaseUrl = "http://192.168.4.1"
+    // PALITAN ITO ng IP address ng ESP32 mo (makikita sa Serial Monitor pag nag-boot).
+    // PAALALA: 192.168.4.1 ay yung DEFAULT SoftAP IP ng ESP32 - pero ang robot sketch mo
+    // ay STA mode (kumokonek sa "Rail Gridon" WiFi), kaya DHCP-assigned IP ang meron siya
+    // (halimbawa 192.168.1.4). Tingnan mo sa Serial Monitor pagka-boot ng robot yung
+    // linyang "Robot IP: x.x.x.x" tapos ilagay dito - o mag-set ng DHCP reservation sa
+    // router mo para hindi na ito magbago.
+    private val esp32BaseUrl = "http://192.168.1.4"
 
     // Throttle para sa command papunta sa ESP32
     private var lastSendTime = 0L
@@ -471,6 +476,11 @@ class MainActivity : ComponentActivity() {
 
         lastGreetedName = name
         lastGreetedTime = now
+
+        // NEW: pinapaalam din sa ESP32 robot mismo na may kilalang mukhang nakita, para
+        // magreact din siya (shake + happy eyes + sound) - hindi lang phone TTS ang naririnig.
+        val greetCommand = if (name.equals("rusty", ignoreCase = true)) "GREET_RUSTY" else "GREET_KNOWN"
+        sendCommandToEsp32(greetCommand)
 
         if (!ttsReady) return
         val phrase = greetings.random().format(name)
