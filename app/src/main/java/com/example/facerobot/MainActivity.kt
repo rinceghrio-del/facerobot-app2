@@ -482,11 +482,13 @@ class MainActivity : ComponentActivity() {
                 }
                 override fun onResults(results: Bundle?) {
                     isListening = false
-                    val text = results
+                    val candidates = results
                         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        ?.firstOrNull()
-                        ?.lowercase(Locale.getDefault())
-                    if (text != null) handleVoiceCommand(text)
+                        ?.map { it.lowercase(Locale.getDefault()) }
+                        .orEmpty()
+                    // Sinusubukan lahat ng alternative na resulta, hindi lang yung pinaka-una,
+                    // dahil minsan nasa 2nd o 3rd guess pa lang yung tamang tugma sa command.
+                    if (candidates.isNotEmpty()) handleVoiceCommand(candidates)
                     scheduleRestartListening()
                 }
                 override fun onPartialResults(partialResults: Bundle?) {}
@@ -496,13 +498,20 @@ class MainActivity : ComponentActivity() {
         startListening()
     }
 
+    // Dapat tugma ito sa locale na ginagamit ng TTS (Locale("fil", "PH")) - kung hindi,
+    // maling language model ang gagamitin sa pakikinig kahit Filipino ang sinasabi ng user.
+    private val recognitionLocale = Locale("fil", "PH")
+
     private fun startListening() {
         if (isListening || isSpeaking) return
         val recognizer = speechRecognizer ?: return
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            // BCP-47 tag (may dash, e.g. "fil-PH") ang inaasahan dito, hindi yung underscore
+            // na output ng Locale.toString() - kaya toLanguageTag() ang ginagamit.
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLocale.toLanguageTag())
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
         isListening = true
         try {
@@ -516,43 +525,51 @@ class MainActivity : ComponentActivity() {
         rootLayout.postDelayed({ startListening() }, 500)
     }
 
-    private fun handleVoiceCommand(text: String) {
-        val custom = commandStore.findMatch(text)
-        if (custom != null) {
-            speak(custom.reply)
-            if (custom.action.isNotBlank()) {
-                sendCommandToEsp32(custom.action)
-            }
-            return
-        }
-
-        when {
-            // Motion Voice Commands
-            text.contains("hinto") || text.contains("stop") || text.contains("tigil") -> {
-                speak("Hihinto na po!")
-                sendCommandToEsp32("STOP")
-            }
-            text.contains("kaliwa") || text.contains("left") -> {
-                speak("Lilikot sa kaliwa.")
-                sendCommandToEsp32("LEFT")
-            }
-            text.contains("kanan") || text.contains("right") -> {
-                speak("Lilikot sa kanan.")
-                sendCommandToEsp32("RIGHT")
-            }
-
-            // Info Voice Commands
-            text.contains("sino ako") || text.contains("sino po ako") || text.contains("sino ba ako") -> {
-                val name = currentRecognizedName
-                val reply = when {
-                    name != null -> "Ikaw ay si $name!"
-                    appState == AppState.CAMERA -> "Hindi pa kita kilala. Pwede mo akong i-enroll."
-                    else -> "Wala akong nakikitang tao ngayon."
+    private fun handleVoiceCommand(candidates: List<String>) {
+        // Sinusubukan ang bawat alternative na resulta ng recognizer hanggang may tumama.
+        for (text in candidates) {
+            val custom = commandStore.findMatch(text)
+            if (custom != null) {
+                speak(custom.reply)
+                if (custom.action.isNotBlank()) {
+                    sendCommandToEsp32(custom.action)
                 }
-                speak(reply)
+                return
             }
-            text.contains("sino ka") -> {
-                speak("ako ay si rustech")
+
+            when {
+                // Motion Voice Commands
+                text.contains("hinto") || text.contains("stop") || text.contains("tigil") -> {
+                    speak("Hihinto na po!")
+                    sendCommandToEsp32("STOP")
+                    return
+                }
+                text.contains("kaliwa") || text.contains("left") -> {
+                    speak("Lilikot sa kaliwa.")
+                    sendCommandToEsp32("LEFT")
+                    return
+                }
+                text.contains("kanan") || text.contains("right") -> {
+                    speak("Lilikot sa kanan.")
+                    sendCommandToEsp32("RIGHT")
+                    return
+                }
+
+                // Info Voice Commands
+                text.contains("sino ako") || text.contains("sino po ako") || text.contains("sino ba ako") -> {
+                    val name = currentRecognizedName
+                    val reply = when {
+                        name != null -> "Ikaw ay si $name!"
+                        appState == AppState.CAMERA -> "Hindi pa kita kilala. Pwede mo akong i-enroll."
+                        else -> "Wala akong nakikitang tao ngayon."
+                    }
+                    speak(reply)
+                    return
+                }
+                text.contains("sino ka") -> {
+                    speak("ako ay si rustech")
+                    return
+                }
             }
         }
     }
