@@ -588,15 +588,24 @@ class MainActivity : ComponentActivity() {
      * Sinusuri kung nasa Kaliwa, Kanan, o Gitna (STOP) ang mukha.
      */
     private fun computeCommand(faceCenterX: Int, frameWidth: Int): String {
-        val screenCenterX = frameWidth / 2
-        val centerZoneWidth = frameWidth / 6 // Gitnang espasyo (Deadzone)
+    val screenCenterX = frameWidth / 2
+    
+    // Pinalapad ang deadzone (ginawang frameWidth / 3.5)
+    // Mas malapad na gitnang espasyo para may allowance bago mag-STOP
+    val centerDeadzoneWidth = (frameWidth / 3.5 / 2).toInt()
 
-        return when {
-            faceCenterX < screenCenterX - centerZoneWidth -> "LEFT"
-            faceCenterX > screenCenterX + centerZoneWidth -> "RIGHT"
-            else -> "STOP" // Pag nasa gitna na, hihinto para manatiling nakatutok
-        }
+    val leftBoundary = screenCenterX - centerDeadzoneWidth
+    val rightBoundary = screenCenterX + centerDeadzoneWidth
+
+    return when {
+        // Mirrored ang front camera input:
+        // Kapag ang mukha ay nasa kaliwa sa pixel coordinates (faceCenterX < leftBoundary),
+        // kailangang pumaling ng robot sa KANAN (RIGHT) para pumunta sa gitna ang mukha.
+        faceCenterX < leftBoundary -> "LEFT"
+        faceCenterX > rightBoundary -> "RIGHT"
+        else -> "STOP" // Kapag pasok na sa deadzone, hihinto agad!
     }
+}
 
     private fun sendCommandThrottled(command: String) {
         val now = System.currentTimeMillis()
