@@ -537,6 +537,9 @@ class MainActivity : ComponentActivity() {
                 }
                 speak(reply)
             }
+            text.contains("sino ka") -> {
+                speak("ako ay si rustech")
+            }
         }
     }
 
