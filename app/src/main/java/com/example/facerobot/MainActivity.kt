@@ -4,6 +4,10 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Rect
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -130,6 +134,9 @@ class MainActivity : ComponentActivity() {
         // Hindi mamamatay ang screen habang bukas ang app
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
+        // I-pilit ang network traffic papunta sa ESP32 Wi-Fi hotspot kahit walang internet
+        forceWifiForEsp32()
+
         cameraExecutor = Executors.newSingleThreadExecutor()
         yoloDetector = YoloPersonDetector(this)
         faceEmbedder = FaceEmbedder(this)
@@ -183,6 +190,27 @@ class MainActivity : ComponentActivity() {
         } else {
             statusText.text = "Naghahanap ng tao... (hinihintay permissions...)"
             ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), 100)
+        }
+    }
+
+    /**
+     * Tinitiyak na ang mga HTTP GET Request ng OkHttpClient ay papunta sa ESP32 Wi-Fi,
+     * kahit nakakonekta ang phone sa Mobile Data o sabihing "No Internet" ang Wi-Fi.
+     */
+    private fun forceWifiForEsp32() {
+        try {
+            val connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
+            val request = NetworkRequest.Builder()
+                .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+                .build()
+
+            connectivityManager.requestNetwork(request, object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    connectivityManager.bindProcessToNetwork(network)
+                }
+            })
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
@@ -243,12 +271,6 @@ class MainActivity : ComponentActivity() {
     private fun showEyesUi() {
         appState = AppState.EYES
         roboEyesView.visibility = View.VISIBLE
-        // NOTE: INVISIBLE (hindi GONE) dapat dito - kapag GONE ang isang View, hindi ito
-        // nire-layout/binibigyan ng laki, kaya walang wastong "surface" na maibibigay sa
-        // CameraX Preview use case. Kapag ganito, humihintay nang walang hanggan ang buong
-        // camera capture session (kasama ang ImageAnalysis) para sa surface na 'yon - kaya
-        // hindi umaandar ang camera kahit "successful" ang bind (walang exception). INVISIBLE
-        // pa rin ang laki/layout, walang lang draw sa screen - RoboEyes pa rin ang makikita.
         previewView.visibility = View.INVISIBLE
         enrollButton.visibility = View.GONE
         roboEyesView.setMood(RoboEyesView.Mood.SEARCHING)
@@ -257,7 +279,6 @@ class MainActivity : ComponentActivity() {
         } else {
             "Naghahanap ng tao... (kulang: assets/yolo_person.tflite)"
         }
-        // Bawat pagbalik sa EYES (tao'y umalis) - pwede na ulit mag-greet sa susunod na makita
         lastGreetedName = null
         lastUnknownGreetTime = 0L
         consecutivePersonDetections = 0
@@ -274,8 +295,7 @@ class MainActivity : ComponentActivity() {
 
     private fun runOnUi(block: () -> Unit) = runOnUiThread(block)
 
-    // ---------- Camera setup (iisang Preview + ImageAnalysis lang, pinapalitan lang
-    // yung ginagawa ng analyzer depende sa kung anong appState) ----------
+    // ---------- Camera setup ----------
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
@@ -295,7 +315,6 @@ class MainActivity : ComponentActivity() {
                         it.setAnalyzer(cameraExecutor) { imageProxy -> processFrame(imageProxy) }
                     }
 
-                // Front camera - kasabay ng screen, kaya nakaharap din sa taong nakatingin sa RoboEyes
                 val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
 
                 cameraProvider.unbindAll()
@@ -325,7 +344,6 @@ class MainActivity : ComponentActivity() {
             if (grantedMap[Manifest.permission.RECORD_AUDIO] == PackageManager.PERMISSION_GRANTED) {
                 setupSpeechRecognizer()
             }
-            // Kung tinanggihan ang mic permission, tuloy pa rin ang app - wala lang voice command.
         }
     }
 
@@ -336,7 +354,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** EYES mode: paminsan-minsan lang mag-run ng YOLO, tignan lang kung may tao. */
     private fun processEyesFrame(imageProxy: ImageProxy) {
         val now = System.currentTimeMillis()
         if (!yoloDetector.isReady || now - lastYoloCheckTime < yoloIntervalMs) {
@@ -357,9 +374,7 @@ class MainActivity : ComponentActivity() {
 
             if (consecutivePersonDetections >= requiredConsecutiveDetections) {
                 runOnUi { roboEyesView.setMood(RoboEyesView.Mood.ALERT) }
-                // Konting delay para makita muna ang "alert" na expression bago lumipat
                 rootLayout.postDelayed({
-                    // Recheck: baka nag-reset na (person left) bago pa dumating ang delay
                     if (appState == AppState.EYES && consecutivePersonDetections >= requiredConsecutiveDetections) {
                         showCameraUi()
                     }
@@ -375,7 +390,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** CAMERA mode: face detection (tracking) + recognition (kilalanin) + ESP32 commands. */
     private fun processCameraFrame(imageProxy: ImageProxy) {
         val mediaImage = imageProxy.image
         if (mediaImage == null) {
@@ -405,11 +419,9 @@ class MainActivity : ComponentActivity() {
         val frameWidth = imageProxy.width
         val frameHeight = imageProxy.height
 
-        // Sundan ang mukha (parehong logic ng orihinal na bersyon)
         val command = computeCommand(box.centerX(), box.width(), frameWidth)
         sendCommandThrottled(command)
 
-        // Face recognition - bihira lang gawin (mabigat kung bawat frame)
         val now = System.currentTimeMillis()
         if (faceEmbedder.isReady && now - lastRecognitionTime > recognitionIntervalMs) {
             lastRecognitionTime = now
@@ -463,7 +475,6 @@ class MainActivity : ComponentActivity() {
         "Hello! Pwede mo ba akong pa-enroll?"
     )
 
-    /** Mag-greet lang minsan kada tao, tapos maghintay ng cooldown bago ulitin. */
     private fun greetIfNeeded(name: String) {
         val now = System.currentTimeMillis()
         val alreadyGreetedRecently = name == lastGreetedName && now - lastGreetedTime < greetingCooldownMs
@@ -477,7 +488,6 @@ class MainActivity : ComponentActivity() {
         speak(phrase)
     }
 
-    /** Parehong cooldown-logic pero para sa mga hindi pa naka-enroll na mukha. */
     private fun greetUnknownIfNeeded() {
         val now = System.currentTimeMillis()
         if (now - lastUnknownGreetTime < greetingCooldownMs) return
@@ -490,11 +500,7 @@ class MainActivity : ComponentActivity() {
     // ---------- Voice command ----------
 
     private fun setupSpeechRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            // Walang speech recognition sa device na 'to - hindi mag-crash, wala lang
-            // voice command feature.
-            return
-        }
+        if (!SpeechRecognizer.isRecognitionAvailable(this)) return
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {}
@@ -543,7 +549,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleVoiceCommand(text: String) {
-        // Unahin munang suriin ang mga custom na command na idinagdag mismo sa app
+        // Unahin munang suriin ang mga custom na command na idinagdag sa UI dialog
         val custom = commandStore.findMatch(text)
         if (custom != null) {
             speak(custom.reply)
@@ -554,6 +560,25 @@ class MainActivity : ComponentActivity() {
         }
 
         when {
+            // Motion Voice Commands
+            text.contains("sulong") || text.contains("forward") || text.contains("lakad") -> {
+                speak("Sige po, susulong ako!")
+                sendCommandToEsp32("FORWARD")
+            }
+            text.contains("hinto") || text.contains("stop") || text.contains("tigil") -> {
+                speak("Hihinto na po!")
+                sendCommandToEsp32("STOP")
+            }
+            text.contains("kaliwa") || text.contains("left") -> {
+                speak("Lilikot sa kaliwa.")
+                sendCommandToEsp32("LEFT")
+            }
+            text.contains("kanan") || text.contains("right") -> {
+                speak("Lilikot sa kanan.")
+                sendCommandToEsp32("RIGHT")
+            }
+
+            // Info Voice Commands
             text.contains("sino ako") || text.contains("sino po ako") || text.contains("sino ba ako") -> {
                 val name = currentRecognizedName
                 val reply = when {
@@ -569,7 +594,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Sentralisadong paraan para magsalita - ipinapahinto muna ang mic bago mag-TTS. */
     private fun speak(phrase: String) {
         if (!ttsReady) return
         isSpeaking = true
@@ -586,11 +610,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Ang Face.boundingBox mula sa ML Kit ay nasa coordinate space ng ORIHINAL (hindi pa
-     * piniko) na frame, pero ang bitmap na galing sa ImageUtils.imageProxyToBitmap ay
-     * naka-rotate na. Kailangan i-convert ang box papunta sa parehong "rotated" space.
-     */
     private fun adjustBoxForRotation(box: Rect, frameWidth: Int, frameHeight: Int, rotationDegrees: Int): Rect {
         return when (rotationDegrees) {
             90 -> Rect(frameHeight - box.bottom, box.left, frameHeight - box.top, box.right)
@@ -600,9 +619,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Simpleng logic para malaman kung saang direksyon dapat gumalaw ang robot.
-     */
     private fun computeCommand(faceCenterX: Int, faceWidth: Int, frameWidth: Int): String {
         val screenCenterX = frameWidth / 2
         val centerZoneWidth = frameWidth / 6
@@ -630,7 +646,7 @@ class MainActivity : ComponentActivity() {
 
         httpClient.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
-                // OK lang kung minsan mag-fail (weak WiFi signal, etc.)
+                // Connection fail error handling
             }
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
                 response.close()
@@ -668,7 +684,6 @@ class MainActivity : ComponentActivity() {
             .show()
     }
 
-    /** Dialog kung saan pwedeng magdagdag/magtanggal ng custom na voice command sa app mismo. */
     private fun showManageCommandsDialog() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -698,7 +713,7 @@ class MainActivity : ComponentActivity() {
                     textSize = 10f
                     setOnClickListener {
                         commandStore.remove(cmd.trigger)
-                        showManageCommandsDialog() // i-refresh ang dialog
+                        showManageCommandsDialog()
                     }
                 })
                 container.addView(row)
