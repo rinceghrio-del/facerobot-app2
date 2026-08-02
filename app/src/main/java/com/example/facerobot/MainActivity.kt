@@ -49,20 +49,13 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 /**
- * FaceRobot MainActivity - buong flow:
- *
- *   [RoboEyes idle screen] --(YOLO nakakita ng tao)--> [Camera + face recognition] --(walang
- *   tao ilang segundo)--> [balik sa RoboEyes]
- *
- * Habang nasa CAMERA state, patuloy na sinusundan ang mukha (LEFT/RIGHT/FORWARD/STOP command
- * papunta sa ESP32) at sinusubukang kilalanin kung sino gamit ang naka-enroll na mga mukha.
+ * FaceRobot MainActivity - Face Centering / Tracking Only Mode
  */
 @androidx.camera.core.ExperimentalGetImage
 class MainActivity : ComponentActivity() {
 
     private enum class AppState { EYES, CAMERA }
 
-    // ---------- UI (gawa lahat sa Kotlin code, walang XML layout) ----------
     private lateinit var rootLayout: FrameLayout
     private lateinit var roboEyesView: RoboEyesView
     private lateinit var previewView: PreviewView
@@ -80,47 +73,35 @@ class MainActivity : ComponentActivity() {
 
     private var appState = AppState.EYES
 
-    // PALITAN ITO ng IP address ng ESP32 mo (makikita sa Serial Monitor pag nag-boot)
     private val esp32BaseUrl = "http://192.168.4.1"
 
-    // Throttle para sa command papunta sa ESP32
     private var lastSendTime = 0L
     private val sendIntervalMs = 300L
 
-    // Throttle para sa YOLO (mabigat siya kaysa ML Kit, kaya bihira lang patakbuhin)
     private var lastYoloCheckTime = 0L
     private val yoloIntervalMs = 400L
 
-    // Ilang sunod-sunod na positibong detection na kailangan bago talaga lumipat sa
-    // camera - iniiwasan nito yung false-positive na isang beses lang na "nakakita"
-    // (ingay/shadow/blur) na nagbubukas ng camera kahit walang totoong tao.
     private var consecutivePersonDetections = 0
     private val requiredConsecutiveDetections = 3
 
-    // Throttle para sa face recognition (embedding + compare)
     private var lastRecognitionTime = 0L
     private val recognitionIntervalMs = 600L
 
-    // Kung gaano katagal walang nakikitang tao bago bumalik sa RoboEyes
     private var lastPersonSeenTime = 0L
     private val personTimeoutMs = 4000L
 
-    // Huling nakuhang embedding ng "hindi kilalang" mukha - gagamitin ng enroll button
     private var lastUnknownFaceEmbedding: FloatArray? = null
 
-    // Text-to-speech para sa pag-greet
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var lastGreetedName: String? = null
     private var lastGreetedTime = 0L
-    private val greetingCooldownMs = 60_000L // ulitin lang ang greeting kada 1 minuto per tao
+    private val greetingCooldownMs = 60_000L
     private var lastUnknownGreetTime = 0L
 
-    // Voice command (hal. "Robot, sino ako?")
     private var speechRecognizer: SpeechRecognizer? = null
     private var isListening = false
     private var isSpeaking = false
-    // Pangalan ng taong kasalukuyang nakikilala ng camera (null kung wala/hindi kilala)
     private var currentRecognizedName: String? = null
 
     private val faceDetectorOptions = FaceDetectorOptions.Builder()
@@ -131,10 +112,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Hindi mamamatay ang screen habang bukas ang app
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        // I-pilit ang network traffic papunta sa ESP32 Wi-Fi hotspot kahit walang internet
         forceWifiForEsp32()
 
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -149,13 +127,10 @@ class MainActivity : ComponentActivity() {
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 val engine = tts ?: return@TextToSpeech
-                // Subukan muna ang Filipino - kung wala sa device, English na lang
                 val result = engine.setLanguage(Locale("fil", "PH"))
                 if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
                     engine.setLanguage(Locale.US)
                 }
-                // Ipahinto ang pakikinig habang nagsasalita ang robot (iwas maka-dinig
-                // ng sarili niyang boses), tapos ipagpatuloy pagkatapos.
                 engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
                     override fun onDone(utteranceId: String?) {
@@ -173,14 +148,10 @@ class MainActivity : ComponentActivity() {
         }
 
         val missingPermissions = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             missingPermissions.add(Manifest.permission.CAMERA)
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             missingPermissions.add(Manifest.permission.RECORD_AUDIO)
         }
 
@@ -193,10 +164,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * Tinitiyak na ang mga HTTP GET Request ng OkHttpClient ay papunta sa ESP32 Wi-Fi,
-     * kahit nakakonekta ang phone sa Mobile Data o sabihing "No Internet" ang Wi-Fi.
-     */
     private fun forceWifiForEsp32() {
         try {
             val connectivityManager = getSystemService(CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -419,7 +386,8 @@ class MainActivity : ComponentActivity() {
         val frameWidth = imageProxy.width
         val frameHeight = imageProxy.height
 
-        val command = computeCommand(box.centerX(), box.width(), frameWidth)
+        // Kukunin lang ang LEFT/RIGHT o STOP (Paggitna)
+        val command = computeCommand(box.centerX(), frameWidth)
         sendCommandThrottled(command)
 
         val now = System.currentTimeMillis()
@@ -549,7 +517,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleVoiceCommand(text: String) {
-        // Unahin munang suriin ang mga custom na command na idinagdag sa UI dialog
         val custom = commandStore.findMatch(text)
         if (custom != null) {
             speak(custom.reply)
@@ -561,10 +528,6 @@ class MainActivity : ComponentActivity() {
 
         when {
             // Motion Voice Commands
-            text.contains("sulong") || text.contains("forward") || text.contains("lakad") -> {
-                speak("Sige po, susulong ako!")
-                sendCommandToEsp32("FORWARD")
-            }
             text.contains("hinto") || text.contains("stop") || text.contains("tigil") -> {
                 speak("Hihinto na po!")
                 sendCommandToEsp32("STOP")
@@ -603,7 +566,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNoFace() {
-        sendCommandThrottled("SEARCH")
+        // Kapag walang mukha, hihinto lang at mag-aabang hanggang bumalik sa eyes mode
+        sendCommandThrottled("STOP")
         val now = System.currentTimeMillis()
         if (now - lastPersonSeenTime > personTimeoutMs) {
             runOnUi { showEyesUi() }
@@ -619,16 +583,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun computeCommand(faceCenterX: Int, faceWidth: Int, frameWidth: Int): String {
+    /**
+     * Tanging Panggipit/Centering logic na lang:
+     * Sinusuri kung nasa Kaliwa, Kanan, o Gitna (STOP) ang mukha.
+     */
+    private fun computeCommand(faceCenterX: Int, frameWidth: Int): String {
         val screenCenterX = frameWidth / 2
-        val centerZoneWidth = frameWidth / 6
-        val closeThreshold = frameWidth / 6
+        val centerZoneWidth = frameWidth / 6 // Gitnang espasyo (Deadzone)
 
         return when {
-            faceWidth > closeThreshold -> "STOP"
             faceCenterX < screenCenterX - centerZoneWidth -> "LEFT"
             faceCenterX > screenCenterX + centerZoneWidth -> "RIGHT"
-            else -> "FORWARD"
+            else -> "STOP" // Pag nasa gitna na, hihinto para manatiling nakatutok
         }
     }
 
@@ -737,7 +703,7 @@ class MainActivity : ComponentActivity() {
             inputType = InputType.TYPE_CLASS_TEXT
         }
         val actionInput = EditText(this).apply {
-            hint = "ESP32 action (opsyonal - hal. LEFT, RIGHT, SPIN, STOP - iwanan blangko kung wala)"
+            hint = "ESP32 action (opsyonal - hal. LEFT, RIGHT, STOP - iwanan blangko kung wala)"
             inputType = InputType.TYPE_CLASS_TEXT
         }
         container.addView(triggerInput)
