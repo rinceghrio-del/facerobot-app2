@@ -622,7 +622,7 @@ class MainActivity : ComponentActivity() {
     private fun computeCommand(faceCenterX: Int, faceWidth: Int, frameWidth: Int): String {
         val screenCenterX = frameWidth / 2
         val centerZoneWidth = frameWidth / 6
-        val closeThreshold = frameWidth / 5
+        val closeThreshold = frameWidth / 6
 
         return when {
             faceWidth > closeThreshold -> "STOP"
