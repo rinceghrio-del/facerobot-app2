@@ -478,6 +478,28 @@ class MainActivity : ComponentActivity() {
                 override fun onEndOfSpeech() {}
                 override fun onError(error: Int) {
                     isListening = false
+                    val errorName = when (error) {
+                        SpeechRecognizer.ERROR_NO_MATCH -> "WALANG NARINIG NA SALITA"
+                        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "TAHIMIK LANG / WALANG NAGSALITA"
+                        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED -> "HINDI SUPORTADO ANG FILIPINO SA PHONE MO"
+                        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE -> "FILIPINO LANGUAGE PACK WALA / DI AVAILABLE"
+                        SpeechRecognizer.ERROR_AUDIO -> "AUDIO ERROR (mic)"
+                        SpeechRecognizer.ERROR_CLIENT -> "CLIENT ERROR"
+                        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "WALANG MIC PERMISSION"
+                        SpeechRecognizer.ERROR_NETWORK -> "NETWORK ERROR"
+                        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "NETWORK TIMEOUT"
+                        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "BUSY PA YUNG RECOGNIZER"
+                        SpeechRecognizer.ERROR_SERVER -> "SERVER ERROR"
+                        else -> "ERROR CODE $error"
+                    }
+                    // Kung Filipino talaga ang hindi supported sa device, bumalik sa default
+                    // locale ng phone imbes na patuloy na mag-fail nang tahimik.
+                    if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
+                        error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
+                    ) {
+                        usingFallbackLocale = true
+                    }
+                    statusText.text = "[MIC] Error: $errorName"
                     scheduleRestartListening()
                 }
                 override fun onResults(results: Bundle?) {
@@ -486,6 +508,11 @@ class MainActivity : ComponentActivity() {
                         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         ?.map { it.lowercase(Locale.getDefault()) }
                         .orEmpty()
+                    statusText.text = if (candidates.isNotEmpty()) {
+                        "[MIC] Narinig: ${candidates.joinToString(" / ")}"
+                    } else {
+                        "[MIC] Walang na-detect na salita"
+                    }
                     // Sinusubukan lahat ng alternative na resulta, hindi lang yung pinaka-una,
                     // dahil minsan nasa 2nd o 3rd guess pa lang yung tamang tugma sa command.
                     if (candidates.isNotEmpty()) handleVoiceCommand(candidates)
@@ -501,15 +528,23 @@ class MainActivity : ComponentActivity() {
     // Dapat tugma ito sa locale na ginagamit ng TTS (Locale("fil", "PH")) - kung hindi,
     // maling language model ang gagamitin sa pakikinig kahit Filipino ang sinasabi ng user.
     private val recognitionLocale = Locale("fil", "PH")
+    // Kapag na-detect na hindi supported ang Filipino sa device, gagamitin na lang
+    // yung default locale ng phone (karaniwang mas malawak ang language support nito).
+    private var usingFallbackLocale = false
 
     private fun startListening() {
         if (isListening || isSpeaking) return
         val recognizer = speechRecognizer ?: return
+        val languageTag = if (usingFallbackLocale) {
+            Locale.getDefault().toLanguageTag()
+        } else {
+            recognitionLocale.toLanguageTag()
+        }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             // BCP-47 tag (may dash, e.g. "fil-PH") ang inaasahan dito, hindi yung underscore
             // na output ng Locale.toString() - kaya toLanguageTag() ang ginagamit.
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, recognitionLocale.toLanguageTag())
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
