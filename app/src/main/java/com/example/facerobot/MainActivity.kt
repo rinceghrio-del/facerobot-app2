@@ -73,7 +73,7 @@ class MainActivity : ComponentActivity() {
 
     private var appState = AppState.EYES
 
-    private val esp32BaseUrl = "http://192.168.4.1"
+    private val esp32BaseUrl = "http://192.168.1.184"
 
     private var lastSendTime = 0L
     private val sendIntervalMs = 300L
@@ -557,7 +557,18 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scheduleRestartListening() {
-        rootLayout.postDelayed({ startListening() }, 500)
+        // Bagong SpeechRecognizer instance ang ginagawa sa bawat restart imbes na muling
+        // gamitin yung luma - kilalang Android bug kasi na paulit-ulit na CLIENT ERROR
+        // ang lumalabas kapag ganito ginawa nang sunod-sunod ang parehong instance.
+        rootLayout.postDelayed({
+            try {
+                speechRecognizer?.destroy()
+            } catch (e: Exception) {
+                // wala lang, tuloy pa rin tayo sa paggawa ng bago
+            }
+            speechRecognizer = null
+            setupSpeechRecognizer()
+        }, 500)
     }
 
     private fun handleVoiceCommand(candidates: List<String>) {
