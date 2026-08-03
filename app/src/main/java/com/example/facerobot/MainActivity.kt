@@ -315,14 +315,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun processFrame(imageProxy: ImageProxy) {
-        // PANSAMANTALANG TEST: kapag aktibong nakikinig ang mic, laktawan muna
-        // ang mabigat na camera/ML processing (YOLO, face embedding) - kung
-        // mawawala ang ERROR CODE 11 (SERVER_DISCONNECTED), kumpirmado na
-        // resource contention talaga ang dahilan.
-        if (isListening) {
-            imageProxy.close()
-            return
-        }
         when (appState) {
             AppState.EYES -> processEyesFrame(imageProxy)
             AppState.CAMERA -> processCameraFrame(imageProxy)
@@ -598,16 +590,6 @@ class MainActivity : ComponentActivity() {
                     sendCommandToEsp32("STOP")
                     return
                 }
-                text.contains("abante") || text.contains("sulong") || text.contains("diretso") || text.contains("forward") -> {
-                    speak("Sige, aabante na po.")
-                    sendCommandToEsp32("FORWARD")
-                    return
-                }
-                text.contains("atras") || text.contains("urong") || text.contains("backward") || text.contains("back") -> {
-                    speak("Aatras na po.")
-                    sendCommandToEsp32("BACKWARD")
-                    return
-                }
                 text.contains("kaliwa") || text.contains("left") -> {
                     speak("Lilikot sa kaliwa.")
                     sendCommandToEsp32("LEFT")
@@ -700,24 +682,12 @@ class MainActivity : ComponentActivity() {
             .url("$esp32BaseUrl/command?dir=$command")
             .build()
 
-        statusText.text = "[ESP32] Nagpapadala: $command..."
         httpClient.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
-                runOnUi {
-                    statusText.text = "[ESP32] HINDI NAKAREACH: ${e.javaClass.simpleName}: ${e.message}"
-                }
+                // Connection fail error handling
             }
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-                val ok = response.isSuccessful
-                val code = response.code
                 response.close()
-                runOnUi {
-                    statusText.text = if (ok) {
-                        "[ESP32] Natanggap: $command"
-                    } else {
-                        "[ESP32] Error response (code $code) para sa: $command"
-                    }
-                }
             }
         })
     }
