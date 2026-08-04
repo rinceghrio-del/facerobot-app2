@@ -23,6 +23,7 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.text.InputType
+import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -621,8 +622,10 @@ class MainActivity : ComponentActivity() {
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
                 override fun onError(error: Int) {
+                    // Improved onError handling to aggressively recover from ERROR_CLIENT (11)
                     clearListenWatchdog()
                     isListening = false
+
                     val errorName = when (error) {
                         SpeechRecognizer.ERROR_NO_MATCH -> "WALANG NARINIG NA SALITA"
                         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "TAHIMIK LANG / WALANG NAGSALITA"
@@ -637,20 +640,48 @@ class MainActivity : ComponentActivity() {
                         SpeechRecognizer.ERROR_SERVER -> "SERVER ERROR"
                         else -> "ERROR CODE $error"
                     }
-                    // Kung Filipino talaga ang hindi supported sa device, bumalik sa default
-                    // locale ng phone imbes na patuloy na mag-fail nang tahimik.
+
+                    // Log for easier debugging with adb logcat
+                    Log.w("MainActivity", "SpeechRecognizer.onError: $error ($errorName)")
+
+                    // If language not supported, fall back once
                     if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                         error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
                     ) {
                         usingFallbackLocale = true
                     }
-                    // Tanging CLIENT/BUSY errors lang ang nangangailangan ng bagong recognizer
-                    // instance - ang ibang error ay pwede lang ulitin ang startListening().
+
+                    // For CLIENT / RECOGNIZER_BUSY errors: destroy and recreate immediately to avoid stale state
                     val needsRecreate = error == SpeechRecognizer.ERROR_CLIENT ||
                         error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
-                    consecutiveClientErrors = if (needsRecreate) consecutiveClientErrors + 1 else 0
+
+                    if (needsRecreate) {
+                        consecutiveClientErrors = consecutiveClientErrors + 1
+
+                        try {
+                            // Best-effort to stop and destroy the possibly-broken recognizer instance
+                            this@MainActivity.speechRecognizer?.cancel()
+                        } catch (e: Exception) {
+                            Log.w("MainActivity", "error while canceling recognizer", e)
+                        }
+                        try {
+                            this@MainActivity.speechRecognizer?.destroy()
+                        } catch (e: Exception) {
+                            Log.w("MainActivity", "error while destroying recognizer", e)
+                        }
+                        this@MainActivity.speechRecognizer = null
+
+                        statusText.text = "[MIC] Error: $errorName (recovering)"
+
+                        // Schedule recreate; require 2 consecutive client errors before force recreate to avoid flapping
+                        scheduleRestartListening(forceRecreate = true)
+                        return
+                    }
+
+                    // Non-client errors: reset consecutive client error counter and restart listening (no recreate)
+                    consecutiveClientErrors = 0
                     statusText.text = "[MIC] Error: $errorName"
-                    scheduleRestartListening(forceRecreate = needsRecreate && consecutiveClientErrors >= 2)
+                    scheduleRestartListening(forceRecreate = false)
                 }
                 override fun onResults(results: Bundle?) {
                     clearListenWatchdog()
@@ -998,62 +1029,3 @@ class MainActivity : ComponentActivity() {
                 })
                 outer.addView(row)
             }
-        }
-
-        outer.addView(View(this).apply {
-            setBackgroundColor(0x22FFFFFF)
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 2)
-                .apply { topMargin = 12; bottomMargin = 24 }
-        })
-
-        outer.addView(TextView(this).apply {
-            text = "Magdagdag ng bagong command:"
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 13.5f
-            setPadding(8, 0, 0, 16)
-        })
-
-        val triggerInput = themedInput("Sasabihin (hal. anong oras na)")
-        val replyInput = themedInput("Isasagot ng robot")
-        val actionInput = themedInput("ESP32 action (opsyonal - hal. LEFT, RIGHT, STOP)")
-
-        val fieldSpacing = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = 16 }
-
-        outer.addView(triggerInput, fieldSpacing)
-        outer.addView(replyInput, fieldSpacing)
-        outer.addView(actionInput, fieldSpacing)
-
-        val scrollView = ScrollView(this).apply { addView(outer) }
-
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setView(scrollView)
-            .setPositiveButton("Idagdag") { _, _ ->
-                val trigger = triggerInput.text.toString().trim()
-                val reply = replyInput.text.toString().trim()
-                val action = actionInput.text.toString().trim()
-                if (trigger.isNotEmpty() && reply.isNotEmpty()) {
-                    commandStore.add(trigger, reply, action)
-                    statusText.text = "Idinagdag na command: \"$trigger\""
-                }
-            }
-            .setNegativeButton("Isara", null)
-            .create()
-        dialog.show()
-        styleDialogWindow(dialog)
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        clearListenWatchdog()
-        clearSpeakWatchdog()
-        cameraExecutor.shutdown()
-        faceDetector.close()
-        yoloDetector.close()
-        faceEmbedder.close()
-        tts?.stop()
-        tts?.shutdown()
-        speechRecognizer?.destroy()
-    }
-}
