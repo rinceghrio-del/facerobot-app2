@@ -3,7 +3,13 @@ package com.example.facerobot
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -60,8 +66,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var roboEyesView: RoboEyesView
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
-    private lateinit var enrollButton: Button
-    private lateinit var commandsButton: Button
+    private lateinit var menuButton: Button
+    private var canEnroll = false
 
     private lateinit var cameraExecutor: ExecutorService
     private val httpClient = OkHttpClient()
@@ -188,24 +194,32 @@ class MainActivity : ComponentActivity() {
         roboEyesView = RoboEyesView(this)
         previewView = PreviewView(this)
 
+        val accentColor = 0xFF00E5C7.toInt()
+        val darkChip = 0xFF1E1E2E.toInt()
+        val darkChipPressed = 0xFF2A2A3E.toInt()
+
         statusText = TextView(this).apply {
             setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            setPadding(24, 24, 24, 24)
-            setBackgroundColor(0x88000000.toInt())
+            textSize = 13f
+            setPadding(40, 22, 40, 22)
             gravity = Gravity.CENTER
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                setColor(0xE6121212.toInt())
+                cornerRadius = 100f
+                setStroke(2, 0x22FFFFFF)
+            }
         }
 
-        enrollButton = Button(this).apply {
-            text = "Mag-enroll ng bagong mukha"
-            visibility = View.GONE
-            setOnClickListener { showEnrollDialog() }
-        }
-
-        commandsButton = Button(this).apply {
-            text = "🎤 Mga Utos"
-            textSize = 12f
-            setOnClickListener { showManageCommandsDialog() }
+        menuButton = Button(this).apply {
+            text = "☰"
+            textSize = 20f
+            setTextColor(accentColor)
+            setPadding(0, 0, 0, 0)
+            stateListAnimator = null
+            elevation = 10f
+            background = makeRippleRoundedDrawable(darkChip, darkChipPressed, 200f)
+            setOnClickListener { showMainMenuDialog() }
         }
 
         rootLayout.addView(
@@ -218,28 +232,96 @@ class MainActivity : ComponentActivity() {
         )
         rootLayout.addView(
             statusText,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-                .apply { gravity = Gravity.TOP }
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+                .apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; topMargin = 40 }
         )
         rootLayout.addView(
-            enrollButton,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-                .apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; bottomMargin = 48 }
-        )
-        rootLayout.addView(
-            commandsButton,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-                .apply { gravity = Gravity.BOTTOM or Gravity.END; bottomMargin = 48; rightMargin = 24 }
+            menuButton,
+            FrameLayout.LayoutParams(150, 150)
+                .apply { gravity = Gravity.BOTTOM or Gravity.END; bottomMargin = 32; rightMargin = 24 }
         )
 
         setContentView(rootLayout)
+    }
+
+    private fun makeRippleRoundedDrawable(baseColor: Int, pressedColor: Int, radius: Float): Drawable {
+        val shape = GradientDrawable().apply {
+            setColor(baseColor)
+            cornerRadius = radius
+        }
+        val mask = GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = radius
+        }
+        return RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), shape, mask)
+    }
+
+    private fun showMainMenuDialog() {
+        val accentColor = 0xFF00E5C7.toInt()
+        val accentPressed = 0xFF00A896.toInt()
+        val darkChip = 0xFF1E1E2E.toInt()
+        val darkChipPressed = 0xFF2A2A3E.toInt()
+        val disabledChip = 0xFF3A3A3A.toInt()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 40, 40, 32)
+            setBackgroundColor(0xFF121212.toInt())
+        }
+
+        val enrollOption = Button(this).apply {
+            text = "✨  Mag-enroll ng bagong mukha"
+            textSize = 14f
+            isAllCaps = false
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(40, 36, 40, 36)
+            isEnabled = canEnroll
+            if (canEnroll) {
+                setTextColor(0xFF04342C.toInt())
+                background = makeRippleRoundedDrawable(accentColor, accentPressed, 24f)
+            } else {
+                setTextColor(0xFF888888.toInt())
+                background = GradientDrawable().apply { setColor(disabledChip); cornerRadius = 24f }
+            }
+            setOnClickListener { showEnrollDialog() }
+        }
+
+        val commandsOption = Button(this).apply {
+            text = "🎤  Mga Utos"
+            textSize = 14f
+            isAllCaps = false
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(40, 36, 40, 36)
+            background = makeRippleRoundedDrawable(darkChip, darkChipPressed, 24f)
+            setOnClickListener { showManageCommandsDialog() }
+        }
+
+        val spacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 24)
+        }
+
+        container.addView(
+            enrollOption,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+        container.addView(spacer)
+        container.addView(
+            commandsOption,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+
+        android.app.AlertDialog.Builder(this)
+            .setView(container)
+            .setNegativeButton("Isara", null)
+            .show()
     }
 
     private fun showEyesUi() {
         appState = AppState.EYES
         roboEyesView.visibility = View.VISIBLE
         previewView.visibility = View.INVISIBLE
-        enrollButton.visibility = View.GONE
+        canEnroll = false
         roboEyesView.setMood(RoboEyesView.Mood.SEARCHING)
         statusText.text = if (yoloDetector.isReady) {
             "Naghahanap ng tao..."
@@ -405,7 +487,7 @@ class MainActivity : ComponentActivity() {
                         runOnUi {
                             if (match != null) {
                                 statusText.text = "Kilala: ${match.name} (${(match.similarity * 100).toInt()}%)"
-                                enrollButton.visibility = View.GONE
+                                canEnroll = false
                                 lastUnknownFaceEmbedding = null
                                 currentRecognizedName = match.name
                                 greetIfNeeded(match.name)
@@ -416,7 +498,7 @@ class MainActivity : ComponentActivity() {
                                     "Hindi kilala"
                                 }
                                 lastUnknownFaceEmbedding = embedding
-                                enrollButton.visibility = View.VISIBLE
+                                canEnroll = true
                                 currentRecognizedName = null
                                 greetUnknownIfNeeded()
                             }
@@ -714,7 +796,7 @@ class MainActivity : ComponentActivity() {
                 if (name.isNotEmpty()) {
                     faceStore.enroll(name, embedding)
                     statusText.text = "Na-enroll: $name"
-                    enrollButton.visibility = View.GONE
+                    canEnroll = false
                     lastUnknownFaceEmbedding = null
                 }
             }
