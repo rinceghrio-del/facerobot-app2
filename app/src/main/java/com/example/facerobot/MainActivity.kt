@@ -15,15 +15,12 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.text.InputType
-import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -113,28 +110,6 @@ class MainActivity : ComponentActivity() {
     private var isSpeaking = false
     private var currentRecognizedName: String? = null
 
-    // ---- Palette (ginamit sa buong UI para magkatugma lahat) ----
-    private val accentColor = 0xFF00E5C7.toInt()
-    private val accentPressed = 0xFF00A896.toInt()
-    private val darkChip = 0xFF1E1E2E.toInt()
-    private val darkChipPressed = 0xFF2A2A3E.toInt()
-    private val darkBg = 0xFF121212.toInt()
-    private val dangerColor = 0xFFFF5C5C.toInt()
-    private val dangerPressed = 0xFFCC4747.toInt()
-
-    // ---------- Mic watchdog: para hindi na "mag-freeze" ang pakikinig ----------
-    // Dating problema: kapag hindi na-fire ang callback ng SpeechRecognizer o ng TextToSpeech
-    // (nangyayari minsan sa ibang device/OEM), permanenteng naka-true ang isListening/isSpeaking
-    // kaya hindi na muling nakikinig ang mic. Ang mga watchdog runnable sa ibaba ay
-    // pilit nagre-reset pagkalampas ng ilang segundo kung hindi natapos ang aksyon.
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private var restartScheduled = false
-    private var listenWatchdog: Runnable? = null
-    private var speakWatchdog: Runnable? = null
-    private val LISTEN_WATCHDOG_MS = 9000L
-    private val SPEAK_WATCHDOG_MS = 7000L
-    private var consecutiveClientErrors = 0
-
     private val faceDetectorOptions = FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
         .build()
@@ -165,11 +140,13 @@ class MainActivity : ComponentActivity() {
                 engine.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                     override fun onStart(utteranceId: String?) {}
                     override fun onDone(utteranceId: String?) {
-                        runOnUi { finishSpeaking() }
+                        isSpeaking = false
+                        runOnUi { scheduleRestartListening() }
                     }
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
-                        runOnUi { finishSpeaking() }
+                        isSpeaking = false
+                        runOnUi { scheduleRestartListening() }
                     }
                 })
                 ttsReady = true
@@ -188,7 +165,7 @@ class MainActivity : ComponentActivity() {
             startCamera()
             setupSpeechRecognizer()
         } else {
-            statusText.text = "Naghahanap ng tao... (hinihintay permissions)"
+            statusText.text = "Naghahanap ng tao... (hinihintay permissions...)"
             ActivityCompat.requestPermissions(this, missingPermissions.toTypedArray(), 100)
         }
     }
@@ -217,18 +194,20 @@ class MainActivity : ComponentActivity() {
         roboEyesView = RoboEyesView(this)
         previewView = PreviewView(this)
 
+        val accentColor = 0xFF00E5C7.toInt()
+        val darkChip = 0xFF1E1E2E.toInt()
+        val darkChipPressed = 0xFF2A2A3E.toInt()
+
         statusText = TextView(this).apply {
             setTextColor(0xFFFFFFFF.toInt())
-            textSize = 13.5f
-            letterSpacing = 0.015f
-            setPadding(44, 24, 44, 24)
+            textSize = 13f
+            setPadding(40, 22, 40, 22)
             gravity = Gravity.CENTER
             typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            elevation = 6f
             background = GradientDrawable().apply {
-                setColor(0xF0121212.toInt())
+                setColor(0xE6121212.toInt())
                 cornerRadius = 100f
-                setStroke(2, 0x33FFFFFF)
+                setStroke(2, 0x22FFFFFF)
             }
         }
 
@@ -277,50 +256,17 @@ class MainActivity : ComponentActivity() {
         return RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), shape, mask)
     }
 
-    /** Iisang dark rounded "card" background para tugma lahat ng dialog sa itim na tema ng app. */
-    private fun dialogCardBackground(radius: Float = 28f): Drawable = GradientDrawable().apply {
-        setColor(darkBg)
-        cornerRadius = radius
-        setStroke(2, 0x22FFFFFF)
-    }
-
-    /** Themed EditText na dark at rounded, tugma sa itsura ng app (dati plain default EditText lang). */
-    private fun themedInput(hintText: String): EditText = EditText(this).apply {
-        hint = hintText
-        inputType = InputType.TYPE_CLASS_TEXT
-        setTextColor(0xFFFFFFFF.toInt())
-        setHintTextColor(0xFF8A8A9A.toInt())
-        textSize = 14f
-        setPadding(32, 26, 32, 26)
-        background = GradientDrawable().apply {
-            setColor(darkChip)
-            cornerRadius = 18f
-            setStroke(2, 0x33FFFFFF)
-        }
-    }
-
-    /** Ginagawang dark-themed ang alert dialog window mismo (hindi lang ang laman) para consistent. */
-    private fun styleDialogWindow(dialog: android.app.AlertDialog) {
-        dialog.window?.setBackgroundDrawable(GradientDrawable().apply {
-            setColor(Color.TRANSPARENT)
-        })
-    }
-
     private fun showMainMenuDialog() {
+        val accentColor = 0xFF00E5C7.toInt()
+        val accentPressed = 0xFF00A896.toInt()
+        val darkChip = 0xFF1E1E2E.toInt()
+        val darkChipPressed = 0xFF2A2A3E.toInt()
         val disabledChip = 0xFF3A3A3A.toInt()
 
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 40, 40, 40)
-            background = dialogCardBackground()
-        }
-
-        val title = TextView(this).apply {
-            text = "Menu"
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            setPadding(8, 0, 8, 28)
+            setPadding(40, 40, 40, 32)
+            setBackgroundColor(0xFF121212.toInt())
         }
 
         val enrollOption = Button(this).apply {
@@ -355,7 +301,6 @@ class MainActivity : ComponentActivity() {
             layoutParams = LinearLayout.LayoutParams(0, 24)
         }
 
-        container.addView(title)
         container.addView(
             enrollOption,
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
@@ -366,12 +311,10 @@ class MainActivity : ComponentActivity() {
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         )
 
-        val dialog = android.app.AlertDialog.Builder(this)
+        android.app.AlertDialog.Builder(this)
             .setView(container)
             .setNegativeButton("Isara", null)
-            .create()
-        dialog.show()
-        styleDialogWindow(dialog)
+            .show()
     }
 
     private fun showEyesUi() {
@@ -608,12 +551,6 @@ class MainActivity : ComponentActivity() {
 
     private fun setupSpeechRecognizer() {
         if (!SpeechRecognizer.isRecognitionAvailable(this)) return
-        // Kung meron nang existing instance, wag nang gumawa ulit - ang paulit-ulit na
-        // paggawa ng bagong SpeechRecognizer ang isa sa sanhi ng "pagka-freeze"/ERROR_CLIENT.
-        if (speechRecognizer != null) {
-            startListening()
-            return
-        }
         speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this).apply {
             setRecognitionListener(object : RecognitionListener {
                 override fun onReadyForSpeech(params: Bundle?) {}
@@ -622,10 +559,7 @@ class MainActivity : ComponentActivity() {
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
                 override fun onError(error: Int) {
-                    // Improved onError handling to aggressively recover from ERROR_CLIENT (11)
-                    clearListenWatchdog()
                     isListening = false
-
                     val errorName = when (error) {
                         SpeechRecognizer.ERROR_NO_MATCH -> "WALANG NARINIG NA SALITA"
                         SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "TAHIMIK LANG / WALANG NAGSALITA"
@@ -640,53 +574,18 @@ class MainActivity : ComponentActivity() {
                         SpeechRecognizer.ERROR_SERVER -> "SERVER ERROR"
                         else -> "ERROR CODE $error"
                     }
-
-                    // Log for easier debugging with adb logcat
-                    Log.w("MainActivity", "SpeechRecognizer.onError: $error ($errorName)")
-
-                    // If language not supported, fall back once
+                    // Kung Filipino talaga ang hindi supported sa device, bumalik sa default
+                    // locale ng phone imbes na patuloy na mag-fail nang tahimik.
                     if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                         error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
                     ) {
                         usingFallbackLocale = true
                     }
-
-                    // For CLIENT / RECOGNIZER_BUSY errors: destroy and recreate immediately to avoid stale state
-                    val needsRecreate = error == SpeechRecognizer.ERROR_CLIENT ||
-                        error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
-
-                    if (needsRecreate) {
-                        consecutiveClientErrors = consecutiveClientErrors + 1
-
-                        try {
-                            // Best-effort to stop and destroy the possibly-broken recognizer instance
-                            this@MainActivity.speechRecognizer?.cancel()
-                        } catch (e: Exception) {
-                            Log.w("MainActivity", "error while canceling recognizer", e)
-                        }
-                        try {
-                            this@MainActivity.speechRecognizer?.destroy()
-                        } catch (e: Exception) {
-                            Log.w("MainActivity", "error while destroying recognizer", e)
-                        }
-                        this@MainActivity.speechRecognizer = null
-
-                        statusText.text = "[MIC] Error: $errorName (recovering)"
-
-                        // Schedule recreate; require 2 consecutive client errors before force recreate to avoid flapping
-                        scheduleRestartListening(forceRecreate = true)
-                        return
-                    }
-
-                    // Non-client errors: reset consecutive client error counter and restart listening (no recreate)
-                    consecutiveClientErrors = 0
                     statusText.text = "[MIC] Error: $errorName"
-                    scheduleRestartListening(forceRecreate = false)
+                    scheduleRestartListening()
                 }
                 override fun onResults(results: Bundle?) {
-                    clearListenWatchdog()
                     isListening = false
-                    consecutiveClientErrors = 0
                     val candidates = results
                         ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                         ?.map { it.lowercase(Locale.getDefault()) }
@@ -731,77 +630,25 @@ class MainActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
         }
+        isListening = true
         try {
             recognizer.startListening(intent)
-            isListening = true
-            armListenWatchdog()
         } catch (e: Exception) {
             isListening = false
-            // Kapag nag-throw agad ang startListening, sirang state na ang recognizer -
-            // ligtas nang gumawa ng bago sa susunod na restart imbes na paulit-ulit na sumigaw.
-            scheduleRestartListening(forceRecreate = true)
         }
     }
 
-    /** Watchdog: kung walang dumating na callback (onResults/onError) sa loob ng ilang segundo,
-     * ituturing na natigil/na-freeze ang recognizer at pilit ire-restart. Dito galing ang fix
-     * sa dating "minsan biglang hindi na nakikinig ang mic hanggang i-restart ang app". */
-    private fun armListenWatchdog() {
-        clearListenWatchdog()
-        val watchdog = Runnable {
-            if (isListening) {
-                isListening = false
-                statusText.text = "[MIC] Natigil, nagre-restart..."
-                scheduleRestartListening(forceRecreate = true)
+    private fun scheduleRestartListening() {
+        // Bagong SpeechRecognizer instance ang ginagawa sa bawat restart imbes na muling
+        // gamitin yung luma - kilalang Android bug kasi na paulit-ulit na CLIENT ERROR
+        // ang lumalabas kapag ganito ginawa nang sunod-sunod ang parehong instance.
+        rootLayout.postDelayed({
+            try {
+                speechRecognizer?.destroy()
+            } catch (e: Exception) {
+                // wala lang, tuloy pa rin tayo sa paggawa ng bago
             }
-        }
-        listenWatchdog = watchdog
-        mainHandler.postDelayed(watchdog, LISTEN_WATCHDOG_MS)
-    }
-
-    private fun clearListenWatchdog() {
-        listenWatchdog?.let { mainHandler.removeCallbacks(it) }
-        listenWatchdog = null
-    }
-
-    private fun armSpeakWatchdog() {
-        clearSpeakWatchdog()
-        val watchdog = Runnable {
-            if (isSpeaking) {
-                finishSpeaking()
-            }
-        }
-        speakWatchdog = watchdog
-        mainHandler.postDelayed(watchdog, SPEAK_WATCHDOG_MS)
-    }
-
-    private fun clearSpeakWatchdog() {
-        speakWatchdog?.let { mainHandler.removeCallbacks(it) }
-        speakWatchdog = null
-    }
-
-    private fun finishSpeaking() {
-        clearSpeakWatchdog()
-        isSpeaking = false
-        scheduleRestartListening()
-    }
-
-    private fun scheduleRestartListening(forceRecreate: Boolean = false) {
-        // Iisang naka-pending na restart lang sa isang pagkakataon - dati posibleng
-        // magtambak ang mga restart (mula sa onError, onResults, atbp.) na siyang
-        // nagdudulot ng sunod-sunod na paggawa ng recognizer at ERROR_CLIENT loop.
-        if (restartScheduled) return
-        restartScheduled = true
-        mainHandler.postDelayed({
-            restartScheduled = false
-            if (forceRecreate) {
-                try {
-                    speechRecognizer?.destroy()
-                } catch (e: Exception) {
-                    // wala lang, tuloy pa rin tayo sa paggawa ng bago
-                }
-                speechRecognizer = null
-            }
+            speechRecognizer = null
             setupSpeechRecognizer()
         }, 500)
     }
@@ -858,10 +705,8 @@ class MainActivity : ComponentActivity() {
     private fun speak(phrase: String) {
         if (!ttsReady) return
         isSpeaking = true
-        clearListenWatchdog()
         speechRecognizer?.stopListening()
         isListening = false
-        armSpeakWatchdog()
         tts?.speak(phrase, TextToSpeech.QUEUE_FLUSH, null, "utt_${System.currentTimeMillis()}")
     }
 
@@ -884,28 +729,28 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Tanging Panggitna/Centering logic na lang:
+     * Tanging Panggipit/Centering logic na lang:
      * Sinusuri kung nasa Kaliwa, Kanan, o Gitna (STOP) ang mukha.
      */
     private fun computeCommand(faceCenterX: Int, frameWidth: Int): String {
-        val screenCenterX = frameWidth / 2
+    val screenCenterX = frameWidth / 2
+    
+    // Pinalapad ang deadzone (ginawang frameWidth / 3.5)
+    // Mas malapad na gitnang espasyo para may allowance bago mag-STOP
+    val centerDeadzoneWidth = (frameWidth / 3.5 / 2).toInt()
 
-        // Pinalapad ang deadzone (ginawang frameWidth / 3.5)
-        // Mas malapad na gitnang espasyo para may allowance bago mag-STOP
-        val centerDeadzoneWidth = (frameWidth / 3.5 / 2).toInt()
+    val leftBoundary = screenCenterX - centerDeadzoneWidth
+    val rightBoundary = screenCenterX + centerDeadzoneWidth
 
-        val leftBoundary = screenCenterX - centerDeadzoneWidth
-        val rightBoundary = screenCenterX + centerDeadzoneWidth
-
-        return when {
-            // Mirrored ang front camera input:
-            // Kapag ang mukha ay nasa kaliwa sa pixel coordinates (faceCenterX < leftBoundary),
-            // kailangang pumaling ng robot sa KANAN (RIGHT) para pumunta sa gitna ang mukha.
-            faceCenterX < leftBoundary -> "LEFT"
-            faceCenterX > rightBoundary -> "RIGHT"
-            else -> "STOP" // Kapag pasok na sa deadzone, hihinto agad!
-        }
+    return when {
+        // Mirrored ang front camera input:
+        // Kapag ang mukha ay nasa kaliwa sa pixel coordinates (faceCenterX < leftBoundary),
+        // kailangang pumaling ng robot sa KANAN (RIGHT) para pumunta sa gitna ang mukha.
+        faceCenterX < leftBoundary -> "LEFT"
+        faceCenterX > rightBoundary -> "RIGHT"
+        else -> "STOP" // Kapag pasok na sa deadzone, hihinto agad!
     }
+}
 
     private fun sendCommandThrottled(command: String) {
         val now = System.currentTimeMillis()
@@ -938,24 +783,14 @@ class MainActivity : ComponentActivity() {
             return
         }
 
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 40, 40, 40)
-            background = dialogCardBackground()
+        val input = EditText(this).apply {
+            hint = "Pangalan (hal. Rusty)"
+            inputType = InputType.TYPE_CLASS_TEXT
         }
-        val title = TextView(this).apply {
-            text = "Mag-enroll ng mukha"
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            setPadding(8, 0, 8, 24)
-        }
-        val input = themedInput("Pangalan (hal. Rusty)")
-        container.addView(title)
-        container.addView(input)
 
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setView(container)
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Mag-enroll ng mukha")
+            .setView(input)
             .setPositiveButton("Save") { _, _ ->
                 val name = input.text.toString().trim()
                 if (name.isNotEmpty()) {
@@ -966,66 +801,95 @@ class MainActivity : ComponentActivity() {
                 }
             }
             .setNegativeButton("Cancel", null)
-            .create()
-        dialog.show()
-        styleDialogWindow(dialog)
+            .show()
     }
 
     private fun showManageCommandsDialog() {
-        val outer = LinearLayout(this).apply {
+        val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(40, 40, 40, 32)
-            background = dialogCardBackground()
+            setPadding(48, 24, 48, 24)
         }
-
-        val title = TextView(this).apply {
-            text = "Mga Voice Command"
-            setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            setPadding(8, 0, 8, 24)
-        }
-        outer.addView(title)
 
         val existing = commandStore.all()
         if (existing.isEmpty()) {
-            outer.addView(TextView(this).apply {
+            container.addView(TextView(this).apply {
                 text = "Wala pang custom na command."
-                setTextColor(0xFFAAAAAA.toInt())
-                textSize = 13f
-                setPadding(8, 0, 0, 24)
+                setPadding(0, 0, 0, 24)
             })
         } else {
             for (cmd in existing) {
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(24, 20, 20, 20)
-                    background = GradientDrawable().apply {
-                        setColor(darkChip)
-                        cornerRadius = 16f
-                    }
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply { bottomMargin = 16 }
                 }
                 row.addView(TextView(this@MainActivity).apply {
-                    val actionPart = if (cmd.action.isNotBlank()) "  •  ESP32: ${cmd.action}" else ""
-                    text = "\"${cmd.trigger}\" → \"${cmd.reply}\"$actionPart"
-                    setTextColor(0xFFFFFFFF.toInt())
+                    val actionPart = if (cmd.action.isNotBlank()) " [ESP32: ${cmd.action}]" else ""
+                    text = "\"${cmd.trigger}\" -> \"${cmd.reply}\"$actionPart"
                     textSize = 13f
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 })
                 row.addView(Button(this@MainActivity).apply {
                     text = "Tanggalin"
                     textSize = 10f
-                    setTextColor(0xFFFFFFFF.toInt())
-                    isAllCaps = false
-                    background = makeRippleRoundedDrawable(dangerColor, dangerPressed, 40f)
                     setOnClickListener {
                         commandStore.remove(cmd.trigger)
                         showManageCommandsDialog()
                     }
                 })
-                outer.addView(row)
+                container.addView(row)
             }
+        }
+
+        container.addView(View(this).apply {
+            setBackgroundColor(0xFFCCCCCC.toInt())
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 2)
+                .apply { topMargin = 32; bottomMargin = 32 }
+        })
+
+        container.addView(TextView(this).apply { text = "Magdagdag ng bagong command:" })
+
+        val triggerInput = EditText(this).apply {
+            hint = "Sasabihin (hal. anong oras na)"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val replyInput = EditText(this).apply {
+            hint = "Isasagot ng robot"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val actionInput = EditText(this).apply {
+            hint = "ESP32 action (opsyonal - hal. LEFT, RIGHT, STOP - iwanan blangko kung wala)"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        container.addView(triggerInput)
+        container.addView(replyInput)
+        container.addView(actionInput)
+
+        val scrollView = ScrollView(this).apply { addView(container) }
+
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Mga Voice Command")
+            .setView(scrollView)
+            .setPositiveButton("Idagdag") { _, _ ->
+                val trigger = triggerInput.text.toString().trim()
+                val reply = replyInput.text.toString().trim()
+                val action = actionInput.text.toString().trim()
+                if (trigger.isNotEmpty() && reply.isNotEmpty()) {
+                    commandStore.add(trigger, reply, action)
+                    statusText.text = "Idinagdag na command: \"$trigger\""
+                }
+            }
+            .setNegativeButton("Isara", null)
+            .show()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        cameraExecutor.shutdown()
+        faceDetector.close()
+        yoloDetector.close()
+        faceEmbedder.close()
+        tts?.stop()
+        tts?.shutdown()
+        speechRecognizer?.destroy()
+    }
+}
