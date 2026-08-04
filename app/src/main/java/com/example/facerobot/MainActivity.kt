@@ -110,9 +110,6 @@ class MainActivity : ComponentActivity() {
     private var isSpeaking = false
     private var currentRecognizedName: String? = null
 
-    private val recognitionLocale = Locale("fil", "PH")
-    private var usingFallbackLocale = false
-
     private val faceDetectorOptions = FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
         .build()
@@ -144,17 +141,12 @@ class MainActivity : ComponentActivity() {
                     override fun onStart(utteranceId: String?) {}
                     override fun onDone(utteranceId: String?) {
                         isSpeaking = false
-                        // Naglagay ng 400ms delay para maka-recover ang audio hardware
-                        runOnUi {
-                            rootLayout.postDelayed({ scheduleRestartListening() }, 400)
-                        }
+                        runOnUi { scheduleRestartListening() }
                     }
                     @Deprecated("Deprecated in Java")
                     override fun onError(utteranceId: String?) {
                         isSpeaking = false
-                        runOnUi {
-                            rootLayout.postDelayed({ scheduleRestartListening() }, 400)
-                        }
+                        runOnUi { scheduleRestartListening() }
                     }
                 })
                 ttsReady = true
@@ -476,6 +468,7 @@ class MainActivity : ComponentActivity() {
         val frameWidth = imageProxy.width
         val frameHeight = imageProxy.height
 
+        // Kukunin lang ang LEFT/RIGHT o STOP (Paggitna)
         val command = computeCommand(box.centerX(), frameWidth)
         sendCommandThrottled(command)
 
@@ -581,19 +574,16 @@ class MainActivity : ComponentActivity() {
                         SpeechRecognizer.ERROR_SERVER -> "SERVER ERROR"
                         else -> "ERROR CODE $error"
                     }
-
+                    // Kung Filipino talaga ang hindi supported sa device, bumalik sa default
+                    // locale ng phone imbes na patuloy na mag-fail nang tahimik.
                     if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                         error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
                     ) {
                         usingFallbackLocale = true
                     }
                     statusText.text = "[MIC] Error: $errorName"
-
-                    // Binigyan ngmas mahabang allowance kapag BUSY para hindi mag-looping error
-                    val restartDelay = if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1200L else 600L
-                    rootLayout.postDelayed({ scheduleRestartListening() }, restartDelay)
+                    scheduleRestartListening()
                 }
-
                 override fun onResults(results: Bundle?) {
                     isListening = false
                     val candidates = results
@@ -605,17 +595,24 @@ class MainActivity : ComponentActivity() {
                     } else {
                         "[MIC] Walang na-detect na salita"
                     }
-
+                    // Sinusubukan lahat ng alternative na resulta, hindi lang yung pinaka-una,
+                    // dahil minsan nasa 2nd o 3rd guess pa lang yung tamang tugma sa command.
                     if (candidates.isNotEmpty()) handleVoiceCommand(candidates)
                     scheduleRestartListening()
                 }
-
                 override fun onPartialResults(partialResults: Bundle?) {}
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
         }
         startListening()
     }
+
+    // Dapat tugma ito sa locale na ginagamit ng TTS (Locale("fil", "PH")) - kung hindi,
+    // maling language model ang gagamitin sa pakikinig kahit Filipino ang sinasabi ng user.
+    private val recognitionLocale = Locale("fil", "PH")
+    // Kapag na-detect na hindi supported ang Filipino sa device, gagamitin na lang
+    // yung default locale ng phone (karaniwang mas malawak ang language support nito).
+    private var usingFallbackLocale = false
 
     private fun startListening() {
         if (isListening || isSpeaking) return
@@ -627,14 +624,11 @@ class MainActivity : ComponentActivity() {
         }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            // BCP-47 tag (may dash, e.g. "fil-PH") ang inaasahan dito, hindi yung underscore
+            // na output ng Locale.toString() - kaya toLanguageTag() ang ginagamit.
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-
-            // Parameter para pahabain ang silence threshold bago mag-timeout
-            putExtra("android.speech.extra.DICTATION_MODE", true)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
-            putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 1500L)
         }
         isListening = true
         try {
@@ -645,16 +639,22 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scheduleRestartListening() {
-        try {
-            speechRecognizer?.destroy()
-        } catch (e: Exception) {
-            // Safe ignore
-        }
-        speechRecognizer = null
-        setupSpeechRecognizer()
+        // Bagong SpeechRecognizer instance ang ginagawa sa bawat restart imbes na muling
+        // gamitin yung luma - kilalang Android bug kasi na paulit-ulit na CLIENT ERROR
+        // ang lumalabas kapag ganito ginawa nang sunod-sunod ang parehong instance.
+        rootLayout.postDelayed({
+            try {
+                speechRecognizer?.destroy()
+            } catch (e: Exception) {
+                // wala lang, tuloy pa rin tayo sa paggawa ng bago
+            }
+            speechRecognizer = null
+            setupSpeechRecognizer()
+        }, 500)
     }
 
     private fun handleVoiceCommand(candidates: List<String>) {
+        // Sinusubukan ang bawat alternative na resulta ng recognizer hanggang may tumama.
         for (text in candidates) {
             val custom = commandStore.findMatch(text)
             if (custom != null) {
@@ -711,6 +711,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNoFace() {
+        // Kapag walang mukha, hihinto lang at mag-aabang hanggang bumalik sa eyes mode
         sendCommandThrottled("STOP")
         val now = System.currentTimeMillis()
         if (now - lastPersonSeenTime > personTimeoutMs) {
@@ -727,19 +728,29 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Tanging Panggipit/Centering logic na lang:
+     * Sinusuri kung nasa Kaliwa, Kanan, o Gitna (STOP) ang mukha.
+     */
     private fun computeCommand(faceCenterX: Int, frameWidth: Int): String {
-        val screenCenterX = frameWidth / 2
-        val centerDeadzoneWidth = (frameWidth / 3.5 / 2).toInt()
+    val screenCenterX = frameWidth / 2
+    
+    // Pinalapad ang deadzone (ginawang frameWidth / 3.5)
+    // Mas malapad na gitnang espasyo para may allowance bago mag-STOP
+    val centerDeadzoneWidth = (frameWidth / 3.5 / 2).toInt()
 
-        val leftBoundary = screenCenterX - centerDeadzoneWidth
-        val rightBoundary = screenCenterX + centerDeadzoneWidth
+    val leftBoundary = screenCenterX - centerDeadzoneWidth
+    val rightBoundary = screenCenterX + centerDeadzoneWidth
 
-        return when {
-            faceCenterX < leftBoundary -> "LEFT"
-            faceCenterX > rightBoundary -> "RIGHT"
-            else -> "STOP"
-        }
+    return when {
+        // Mirrored ang front camera input:
+        // Kapag ang mukha ay nasa kaliwa sa pixel coordinates (faceCenterX < leftBoundary),
+        // kailangang pumaling ng robot sa KANAN (RIGHT) para pumunta sa gitna ang mukha.
+        faceCenterX < leftBoundary -> "LEFT"
+        faceCenterX > rightBoundary -> "RIGHT"
+        else -> "STOP" // Kapag pasok na sa deadzone, hihinto agad!
     }
+}
 
     private fun sendCommandThrottled(command: String) {
         val now = System.currentTimeMillis()
@@ -755,7 +766,7 @@ class MainActivity : ComponentActivity() {
 
         httpClient.newCall(request).enqueue(object : okhttp3.Callback {
             override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
-                // Connection failure handling
+                // Connection fail error handling
             }
             override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
                 response.close()
@@ -796,105 +807,87 @@ class MainActivity : ComponentActivity() {
     private fun showManageCommandsDialog() {
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(48, 32, 48, 32)
-        }
-
-        val title = TextView(this).apply {
-            text = "Mga Custom Voice Command"
-            textSize = 18f
-            setTypeface(null, Typeface.BOLD)
-            setPadding(0, 0, 0, 24)
-        }
-        container.addView(title)
-
-        val scrollView = ScrollView(this)
-        val listLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        fun refreshList() {
-            listLayout.removeAllViews()
-            val commands = commandStore.getAll()
-            if (commands.isEmpty()) {
-                val emptyTv = TextView(this).apply {
-                    text = "Wala pang naisave na command."
-                    setPadding(0, 16, 0, 16)
-                }
-                listLayout.addView(emptyTv)
-            } else {
-                for (cmd in commands) {
-                    val row = LinearLayout(this).apply {
-                        orientation = LinearLayout.HORIZONTAL
-                        setPadding(0, 8, 0, 8)
-                    }
-                    val tv = TextView(this).apply {
-                        text = "• \"${cmd.phrase}\" -> \"${cmd.reply}\" ${if (cmd.action.isNotBlank()) "[${cmd.action}]" else ""}"
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                    }
-                    val delBtn = Button(this).apply {
-                        text = "✕"
-                        setTextColor(Color.RED)
-                        setOnClickListener {
-                            commandStore.delete(cmd.phrase)
-                            refreshList()
-                        }
-                    }
-                    row.addView(tv)
-                    row.addView(delBtn)
-                    listLayout.addView(row)
-                }
-            }
-        }
-
-        refreshList()
-        scrollView.addView(listLayout)
-        container.addView(scrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 400))
-
-        val addBtn = Button(this).apply {
-            text = "+ Magdagdag ng Command"
-            setOnClickListener { showAddCommandDialog { refreshList() } }
-        }
-        container.addView(addBtn)
-
-        android.app.AlertDialog.Builder(this)
-            .setView(container)
-            .setPositiveButton("OK", null)
-            .show()
-    }
-
-    private fun showAddCommandDialog(onAdded: () -> Unit) {
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
             setPadding(48, 24, 48, 24)
         }
 
-        val phraseInput = EditText(this).apply { hint = "Salita (e.g. kumusta)" }
-        val replyInput = EditText(this).apply { hint = "Sagot ng robot (e.g. Mabuti naman)" }
-        val actionInput = EditText(this).apply { hint = "ESP32 Action (e.g. LEFT, RIGHT, STOP o leave blank)" }
+        val existing = commandStore.all()
+        if (existing.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = "Wala pang custom na command."
+                setPadding(0, 0, 0, 24)
+            })
+        } else {
+            for (cmd in existing) {
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                row.addView(TextView(this@MainActivity).apply {
+                    val actionPart = if (cmd.action.isNotBlank()) " [ESP32: ${cmd.action}]" else ""
+                    text = "\"${cmd.trigger}\" -> \"${cmd.reply}\"$actionPart"
+                    textSize = 13f
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                row.addView(Button(this@MainActivity).apply {
+                    text = "Tanggalin"
+                    textSize = 10f
+                    setOnClickListener {
+                        commandStore.remove(cmd.trigger)
+                        showManageCommandsDialog()
+                    }
+                })
+                container.addView(row)
+            }
+        }
 
-        layout.addView(phraseInput)
-        layout.addView(replyInput)
-        layout.addView(actionInput)
+        container.addView(View(this).apply {
+            setBackgroundColor(0xFFCCCCCC.toInt())
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 2)
+                .apply { topMargin = 32; bottomMargin = 32 }
+        })
+
+        container.addView(TextView(this).apply { text = "Magdagdag ng bagong command:" })
+
+        val triggerInput = EditText(this).apply {
+            hint = "Sasabihin (hal. anong oras na)"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val replyInput = EditText(this).apply {
+            hint = "Isasagot ng robot"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        val actionInput = EditText(this).apply {
+            hint = "ESP32 action (opsyonal - hal. LEFT, RIGHT, STOP - iwanan blangko kung wala)"
+            inputType = InputType.TYPE_CLASS_TEXT
+        }
+        container.addView(triggerInput)
+        container.addView(replyInput)
+        container.addView(actionInput)
+
+        val scrollView = ScrollView(this).apply { addView(container) }
 
         android.app.AlertDialog.Builder(this)
-            .setTitle("Bagong Command")
-            .setView(layout)
-            .setPositiveButton("Save") { _, _ ->
-                val p = phraseInput.text.toString().trim()
-                val r = replyInput.text.toString().trim()
-                val a = actionInput.text.toString().trim()
-                if (p.isNotEmpty() && r.isNotEmpty()) {
-                    commandStore.add(p, r, a)
-                    onAdded()
+            .setTitle("Mga Voice Command")
+            .setView(scrollView)
+            .setPositiveButton("Idagdag") { _, _ ->
+                val trigger = triggerInput.text.toString().trim()
+                val reply = replyInput.text.toString().trim()
+                val action = actionInput.text.toString().trim()
+                if (trigger.isNotEmpty() && reply.isNotEmpty()) {
+                    commandStore.add(trigger, reply, action)
+                    statusText.text = "Idinagdag na command: \"$trigger\""
                 }
             }
-            .setNegativeButton("Cancel", null)
+            .setNegativeButton("Isara", null)
             .show()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
+        faceDetector.close()
+        yoloDetector.close()
+        faceEmbedder.close()
         tts?.stop()
         tts?.shutdown()
         speechRecognizer?.destroy()
