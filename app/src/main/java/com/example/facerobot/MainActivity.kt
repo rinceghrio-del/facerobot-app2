@@ -3,7 +3,13 @@ package com.example.facerobot
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
@@ -60,8 +66,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var roboEyesView: RoboEyesView
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
-    private lateinit var enrollButton: Button
-    private lateinit var commandsButton: Button
+    private lateinit var menuButton: Button
+    private var canEnroll = false
 
     private lateinit var cameraExecutor: ExecutorService
     private val httpClient = OkHttpClient()
@@ -103,9 +109,6 @@ class MainActivity : ComponentActivity() {
     private var isListening = false
     private var isSpeaking = false
     private var currentRecognizedName: String? = null
-
-    private val recognitionLocale = Locale("fil", "PH")
-    private var usingFallbackLocale = false
 
     private val faceDetectorOptions = FaceDetectorOptions.Builder()
         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
@@ -191,24 +194,32 @@ class MainActivity : ComponentActivity() {
         roboEyesView = RoboEyesView(this)
         previewView = PreviewView(this)
 
+        val accentColor = 0xFF00E5C7.toInt()
+        val darkChip = 0xFF1E1E2E.toInt()
+        val darkChipPressed = 0xFF2A2A3E.toInt()
+
         statusText = TextView(this).apply {
             setTextColor(0xFFFFFFFF.toInt())
-            textSize = 16f
-            setPadding(24, 24, 24, 24)
-            setBackgroundColor(0x88000000.toInt())
+            textSize = 13f
+            setPadding(40, 22, 40, 22)
             gravity = Gravity.CENTER
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            background = GradientDrawable().apply {
+                setColor(0xE6121212.toInt())
+                cornerRadius = 100f
+                setStroke(2, 0x22FFFFFF)
+            }
         }
 
-        enrollButton = Button(this).apply {
-            text = "Mag-enroll ng bagong mukha"
-            visibility = View.GONE
-            setOnClickListener { showEnrollDialog() }
-        }
-
-        commandsButton = Button(this).apply {
-            text = "🎤 Mga Utos"
-            textSize = 12f
-            setOnClickListener { showManageCommandsDialog() }
+        menuButton = Button(this).apply {
+            text = "☰"
+            textSize = 20f
+            setTextColor(accentColor)
+            setPadding(0, 0, 0, 0)
+            stateListAnimator = null
+            elevation = 10f
+            background = makeRippleRoundedDrawable(darkChip, darkChipPressed, 200f)
+            setOnClickListener { showMainMenuDialog() }
         }
 
         rootLayout.addView(
@@ -221,28 +232,96 @@ class MainActivity : ComponentActivity() {
         )
         rootLayout.addView(
             statusText,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-                .apply { gravity = Gravity.TOP }
+            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+                .apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; topMargin = 40 }
         )
         rootLayout.addView(
-            enrollButton,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-                .apply { gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL; bottomMargin = 48 }
-        )
-        rootLayout.addView(
-            commandsButton,
-            FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT)
-                .apply { gravity = Gravity.BOTTOM or Gravity.END; bottomMargin = 48; rightMargin = 24 }
+            menuButton,
+            FrameLayout.LayoutParams(150, 150)
+                .apply { gravity = Gravity.BOTTOM or Gravity.END; bottomMargin = 32; rightMargin = 24 }
         )
 
         setContentView(rootLayout)
+    }
+
+    private fun makeRippleRoundedDrawable(baseColor: Int, pressedColor: Int, radius: Float): Drawable {
+        val shape = GradientDrawable().apply {
+            setColor(baseColor)
+            cornerRadius = radius
+        }
+        val mask = GradientDrawable().apply {
+            setColor(Color.WHITE)
+            cornerRadius = radius
+        }
+        return RippleDrawable(ColorStateList.valueOf(0x40FFFFFF), shape, mask)
+    }
+
+    private fun showMainMenuDialog() {
+        val accentColor = 0xFF00E5C7.toInt()
+        val accentPressed = 0xFF00A896.toInt()
+        val darkChip = 0xFF1E1E2E.toInt()
+        val darkChipPressed = 0xFF2A2A3E.toInt()
+        val disabledChip = 0xFF3A3A3A.toInt()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(40, 40, 40, 32)
+            setBackgroundColor(0xFF121212.toInt())
+        }
+
+        val enrollOption = Button(this).apply {
+            text = "✨  Mag-enroll ng bagong mukha"
+            textSize = 14f
+            isAllCaps = false
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(40, 36, 40, 36)
+            isEnabled = canEnroll
+            if (canEnroll) {
+                setTextColor(0xFF04342C.toInt())
+                background = makeRippleRoundedDrawable(accentColor, accentPressed, 24f)
+            } else {
+                setTextColor(0xFF888888.toInt())
+                background = GradientDrawable().apply { setColor(disabledChip); cornerRadius = 24f }
+            }
+            setOnClickListener { showEnrollDialog() }
+        }
+
+        val commandsOption = Button(this).apply {
+            text = "🎤  Mga Utos"
+            textSize = 14f
+            isAllCaps = false
+            setTextColor(0xFFFFFFFF.toInt())
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            setPadding(40, 36, 40, 36)
+            background = makeRippleRoundedDrawable(darkChip, darkChipPressed, 24f)
+            setOnClickListener { showManageCommandsDialog() }
+        }
+
+        val spacer = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(0, 24)
+        }
+
+        container.addView(
+            enrollOption,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+        container.addView(spacer)
+        container.addView(
+            commandsOption,
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        )
+
+        android.app.AlertDialog.Builder(this)
+            .setView(container)
+            .setNegativeButton("Isara", null)
+            .show()
     }
 
     private fun showEyesUi() {
         appState = AppState.EYES
         roboEyesView.visibility = View.VISIBLE
         previewView.visibility = View.INVISIBLE
-        enrollButton.visibility = View.GONE
+        canEnroll = false
         roboEyesView.setMood(RoboEyesView.Mood.SEARCHING)
         statusText.text = if (yoloDetector.isReady) {
             "Naghahanap ng tao..."
@@ -389,6 +468,7 @@ class MainActivity : ComponentActivity() {
         val frameWidth = imageProxy.width
         val frameHeight = imageProxy.height
 
+        // Kukunin lang ang LEFT/RIGHT o STOP (Paggitna)
         val command = computeCommand(box.centerX(), frameWidth)
         sendCommandThrottled(command)
 
@@ -407,7 +487,7 @@ class MainActivity : ComponentActivity() {
                         runOnUi {
                             if (match != null) {
                                 statusText.text = "Kilala: ${match.name} (${(match.similarity * 100).toInt()}%)"
-                                enrollButton.visibility = View.GONE
+                                canEnroll = false
                                 lastUnknownFaceEmbedding = null
                                 currentRecognizedName = match.name
                                 greetIfNeeded(match.name)
@@ -418,7 +498,7 @@ class MainActivity : ComponentActivity() {
                                     "Hindi kilala"
                                 }
                                 lastUnknownFaceEmbedding = embedding
-                                enrollButton.visibility = View.VISIBLE
+                                canEnroll = true
                                 currentRecognizedName = null
                                 greetUnknownIfNeeded()
                             }
@@ -494,6 +574,8 @@ class MainActivity : ComponentActivity() {
                         SpeechRecognizer.ERROR_SERVER -> "SERVER ERROR"
                         else -> "ERROR CODE $error"
                     }
+                    // Kung Filipino talaga ang hindi supported sa device, bumalik sa default
+                    // locale ng phone imbes na patuloy na mag-fail nang tahimik.
                     if (error == SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED ||
                         error == SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE
                     ) {
@@ -513,6 +595,8 @@ class MainActivity : ComponentActivity() {
                     } else {
                         "[MIC] Walang na-detect na salita"
                     }
+                    // Sinusubukan lahat ng alternative na resulta, hindi lang yung pinaka-una,
+                    // dahil minsan nasa 2nd o 3rd guess pa lang yung tamang tugma sa command.
                     if (candidates.isNotEmpty()) handleVoiceCommand(candidates)
                     scheduleRestartListening()
                 }
@@ -522,6 +606,13 @@ class MainActivity : ComponentActivity() {
         }
         startListening()
     }
+
+    // Dapat tugma ito sa locale na ginagamit ng TTS (Locale("fil", "PH")) - kung hindi,
+    // maling language model ang gagamitin sa pakikinig kahit Filipino ang sinasabi ng user.
+    private val recognitionLocale = Locale("fil", "PH")
+    // Kapag na-detect na hindi supported ang Filipino sa device, gagamitin na lang
+    // yung default locale ng phone (karaniwang mas malawak ang language support nito).
+    private var usingFallbackLocale = false
 
     private fun startListening() {
         if (isListening || isSpeaking) return
@@ -533,6 +624,8 @@ class MainActivity : ComponentActivity() {
         }
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            // BCP-47 tag (may dash, e.g. "fil-PH") ang inaasahan dito, hindi yung underscore
+            // na output ng Locale.toString() - kaya toLanguageTag() ang ginagamit.
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
@@ -546,11 +639,14 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun scheduleRestartListening() {
+        // Bagong SpeechRecognizer instance ang ginagawa sa bawat restart imbes na muling
+        // gamitin yung luma - kilalang Android bug kasi na paulit-ulit na CLIENT ERROR
+        // ang lumalabas kapag ganito ginawa nang sunod-sunod ang parehong instance.
         rootLayout.postDelayed({
             try {
                 speechRecognizer?.destroy()
             } catch (e: Exception) {
-                // Ignore failure on cleanup
+                // wala lang, tuloy pa rin tayo sa paggawa ng bago
             }
             speechRecognizer = null
             setupSpeechRecognizer()
@@ -558,6 +654,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleVoiceCommand(candidates: List<String>) {
+        // Sinusubukan ang bawat alternative na resulta ng recognizer hanggang may tumama.
         for (text in candidates) {
             val custom = commandStore.findMatch(text)
             if (custom != null) {
@@ -569,6 +666,7 @@ class MainActivity : ComponentActivity() {
             }
 
             when {
+                // Motion Voice Commands
                 text.contains("hinto") || text.contains("stop") || text.contains("tigil") -> {
                     speak("Hihinto na po!")
                     sendCommandToEsp32("STOP")
@@ -584,6 +682,8 @@ class MainActivity : ComponentActivity() {
                     sendCommandToEsp32("RIGHT")
                     return
                 }
+
+                // Info Voice Commands
                 text.contains("sino ako") || text.contains("sino po ako") || text.contains("sino ba ako") -> {
                     val name = currentRecognizedName
                     val reply = when {
@@ -611,6 +711,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNoFace() {
+        // Kapag walang mukha, hihinto lang at mag-aabang hanggang bumalik sa eyes mode
         sendCommandThrottled("STOP")
         val now = System.currentTimeMillis()
         if (now - lastPersonSeenTime > personTimeoutMs) {
@@ -628,24 +729,28 @@ class MainActivity : ComponentActivity() {
     }
 
     /**
-     * Centering logic para sa Mirrored Front Camera
+     * Tanging Panggipit/Centering logic na lang:
+     * Sinusuri kung nasa Kaliwa, Kanan, o Gitna (STOP) ang mukha.
      */
     private fun computeCommand(faceCenterX: Int, frameWidth: Int): String {
-        val screenCenterX = frameWidth / 2
-        val centerDeadzoneWidth = (frameWidth / 3.5 / 2).toInt()
+    val screenCenterX = frameWidth / 2
+    
+    // Pinalapad ang deadzone (ginawang frameWidth / 3.5)
+    // Mas malapad na gitnang espasyo para may allowance bago mag-STOP
+    val centerDeadzoneWidth = (frameWidth / 3.5 / 2).toInt()
 
-        val leftBoundary = screenCenterX - centerDeadzoneWidth
-        val rightBoundary = screenCenterX + centerDeadzoneWidth
+    val leftBoundary = screenCenterX - centerDeadzoneWidth
+    val rightBoundary = screenCenterX + centerDeadzoneWidth
 
-        return when {
-            // Dahil sa mirrored front camera:
-            // Mukha nasa Kaliwa ng camera feed -> Robot liliko sa KANAN (RIGHT)
-            // Mukha nasa Kanan ng camera feed -> Robot liliko sa KALIWA (LEFT)
-            faceCenterX < leftBoundary -> "RIGHT"
-            faceCenterX > rightBoundary -> "LEFT"
-            else -> "STOP"
-        }
+    return when {
+        // Mirrored ang front camera input:
+        // Kapag ang mukha ay nasa kaliwa sa pixel coordinates (faceCenterX < leftBoundary),
+        // kailangang pumaling ng robot sa KANAN (RIGHT) para pumunta sa gitna ang mukha.
+        faceCenterX < leftBoundary -> "LEFT"
+        faceCenterX > rightBoundary -> "RIGHT"
+        else -> "STOP" // Kapag pasok na sa deadzone, hihinto agad!
     }
+}
 
     private fun sendCommandThrottled(command: String) {
         val now = System.currentTimeMillis()
@@ -691,7 +796,7 @@ class MainActivity : ComponentActivity() {
                 if (name.isNotEmpty()) {
                     faceStore.enroll(name, embedding)
                     statusText.text = "Na-enroll: $name"
-                    enrollButton.visibility = View.GONE
+                    canEnroll = false
                     lastUnknownFaceEmbedding = null
                 }
             }
@@ -752,7 +857,7 @@ class MainActivity : ComponentActivity() {
             inputType = InputType.TYPE_CLASS_TEXT
         }
         val actionInput = EditText(this).apply {
-            hint = "ESP32 action (opsyonal - hal. LEFT, RIGHT, STOP)"
+            hint = "ESP32 action (opsyonal - hal. LEFT, RIGHT, STOP - iwanan blangko kung wala)"
             inputType = InputType.TYPE_CLASS_TEXT
         }
         container.addView(triggerInput)
@@ -780,12 +885,11 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        try {
-            speechRecognizer?.destroy()
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        faceDetector.close()
+        yoloDetector.close()
+        faceEmbedder.close()
         tts?.stop()
         tts?.shutdown()
+        speechRecognizer?.destroy()
     }
 }
