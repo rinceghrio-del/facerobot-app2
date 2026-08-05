@@ -721,6 +721,11 @@ class MainActivity : ComponentActivity() {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, languageTag)
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            // Sinasabi sa recognizer na mas gusto ang on-device/offline recognition kapag
+            // may naka-download na language pack - kaya hindi na kailangan ng totoong
+            // internet papunta sa Google server. Kung wala pang na-download na offline pack,
+            // babalik lang ito sa normal online recognition (walang masisira).
+            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
         }
         try {
             recognizer.startListening(intent)
