@@ -90,7 +90,11 @@ class MainActivity : ComponentActivity() {
 
     private var appState = AppState.EYES
 
-    private val esp32BaseUrl = "http://192.168.1.184"
+    // AP mode: ang ESP32 mismo ang gumagawa ng sarili niyang WiFi hotspot, at ang phone
+    // ang kumokonekta dito (imbes na parehong sumali sa home router). 192.168.4.1 ang
+    // default gateway IP ng ESP32 kapag SoftAP mode. Walang totoong internet dito kaya
+    // mobile data ng phone ang gagamitin para sa speech recognition (Filipino online).
+    private val esp32BaseUrl = "http://192.168.4.1"
 
     private var lastSendTime = 0L
     private val sendIntervalMs = 300L
@@ -702,15 +706,19 @@ class MainActivity : ComponentActivity() {
     // Dapat tugma ito sa locale na ginagamit ng TTS (Locale("fil", "PH")) - kung hindi,
     // maling language model ang gagamitin sa pakikinig kahit Filipino ang sinasabi ng user.
     private val recognitionLocale = Locale("fil", "PH")
-    // Kapag na-detect na hindi supported ang Filipino sa device, gagamitin na lang
-    // yung default locale ng phone (karaniwang mas malawak ang language support nito).
+    // Kapag na-detect na hindi supported ang Filipino sa device (karaniwan ito sa mga phone
+    // na walang offline Filipino model), gagamit na lang tayo ng English bilang fallback.
+    // HINDI natin ginagamit ang Locale.getDefault() dito dahil kung Filipino din ang
+    // system language ng phone, babalik lang ulit sa parehong "unsupported" na resulta -
+    // walang katapusang loop. English ang halos laging available offline sa lahat ng device.
+    private val fallbackLocale = Locale.US
     private var usingFallbackLocale = false
 
     private fun startListening() {
         if (isListening || isSpeaking) return
         val recognizer = speechRecognizer ?: return
         val languageTag = if (usingFallbackLocale) {
-            Locale.getDefault().toLanguageTag()
+            fallbackLocale.toLanguageTag()
         } else {
             recognitionLocale.toLanguageTag()
         }
